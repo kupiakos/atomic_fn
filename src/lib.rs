@@ -466,30 +466,23 @@ pub trait FnPtr: Copy + sealed::FnPtrSealed /* Eq + Ord + Hash + Pointer + Debug
 }
 
 macro_rules! impl_fn_ptr {
-    ($($arg:ident),+) => {
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for unsafe fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for unsafe fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for extern "C" fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for extern "C" fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for unsafe extern "C" fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for unsafe extern "C" fn($($arg),+) -> Ret {}
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for extern "C" fn($($arg),+ , ...) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for extern "C" fn($($arg),+ , ...) -> Ret {}
-        impl<Ret, $($arg),+> sealed::FnPtrSealed for unsafe extern "C" fn($($arg),+ , ...) -> Ret {}
-        impl<Ret, $($arg),+> FnPtr for unsafe extern "C" fn($($arg),+ , ...) -> Ret {}
+    (@impl traits ($($generics:tt)*) $fn:ty) => {
+        impl<Ret $($generics)*> sealed::FnPtrSealed for $fn {}
+        impl<Ret $($generics)*> FnPtr for $fn {}
     };
-    // Variadic functions must have at least one non variadic arg
-    () => {
-        impl<Ret> sealed::FnPtrSealed for fn() -> Ret {}
-        impl<Ret> FnPtr for fn() -> Ret {}
-        impl<Ret> sealed::FnPtrSealed for unsafe fn() -> Ret {}
-        impl<Ret> FnPtr for unsafe fn() -> Ret {}
-        impl<Ret> sealed::FnPtrSealed for extern "C" fn() -> Ret {}
-        impl<Ret> FnPtr for extern "C" fn() -> Ret {}
-        impl<Ret> sealed::FnPtrSealed for unsafe extern "C" fn() -> Ret {}
-        impl<Ret> FnPtr for unsafe extern "C" fn() -> Ret {}
+    (@impl variadics $($arg:ident),+) => {
+        impl_fn_ptr!(@impl traits ($(,$arg)+) extern "C" fn($($arg),+ , ...) -> Ret);
+        impl_fn_ptr!(@impl traits ($(,$arg)+) unsafe extern "C" fn($($arg),+ , ...) -> Ret);
+    };
+    (@impl variadics) => {
+        // Variadic functions must have at least one non variadic arg
+    };
+    ($($arg:ident),*) => {
+        impl_fn_ptr!(@impl traits ($(,$arg)*) fn($($arg),*) -> Ret);
+        impl_fn_ptr!(@impl traits ($(,$arg)*) unsafe fn($($arg),*) -> Ret);
+        impl_fn_ptr!(@impl traits ($(,$arg)*) extern "C" fn($($arg),*) -> Ret);
+        impl_fn_ptr!(@impl traits ($(,$arg)*) unsafe extern "C" fn($($arg),*) -> Ret);
+        impl_fn_ptr!(@impl variadics $($arg),*);
     };
 }
 
