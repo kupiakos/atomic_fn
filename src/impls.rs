@@ -1,73 +1,64 @@
-use crate::sealed::FnPtrSealed;
+use core::sync::atomic;
 
-pub(crate) trait Raw: Copy + Unpin {}
+/// Ideally, an atomic pointer is used, with a function pointer being the
+/// same size as a data pointer.
+const USE_ATOMIC_PTR: bool =
+    cfg!(target_has_atomic = "ptr") && size_of::<fn()>() == size_of::<*mut ()>();
 
-impl Raw for *mut () {}
-impl Raw for usize {}
-impl Raw for u64 {}
-impl Raw for u32 {}
-impl Raw for u16 {}
+/// Uses const generics to statically select an atomic and raw inner type that
+/// is layout-compatible with a `fn()`.
+///
+/// # Safety
+/// - The types in `Atomic` and `Raw` must have the same size as `SIZE`.
+/// - If `USE_ATOMIC_PTR` is `true`, they must be `AtomicPtr<U>` and `*mut U`
+///   respectively.
+/// - These types must not have stricter bit validity requirements than `fn`.
+pub unsafe trait SelectAtomicFnInner<const USE_ATOMIC_PTR: bool, const SIZE: usize> {
+    /// The equivalent `Atomic` type with a size and alignment compatible
+    /// with `fn` on this platform.
+    type Atomic;
 
-union FnPtrRawConvert<T: FnPtrExt, R: Raw> {
-    fn_ptr: T,
-    raw: R,
+    /// The non-atomic type stored in the [`AtomicFnInner`] atomic type.
+    type Raw;
 }
 
-pub(crate) trait FnPtrExt: FnPtrSealed {
-    #[inline(always)]
-    unsafe fn to_raw<R: Raw>(self) -> R {
-        debug_assert_eq!(core::mem::size_of::<R>(), core::mem::size_of::<Self>());
-
-        (FnPtrRawConvert::<Self, R> { fn_ptr: self }).raw
-    }
-    #[inline(always)]
-    unsafe fn from_raw<R: Raw>(raw: R) -> Self {
-        debug_assert_eq!(core::mem::size_of::<R>(), core::mem::size_of::<Self>());
-
-        (FnPtrRawConvert::<Self, R> { raw }).fn_ptr
-    }
+#[cfg(target_has_atomic = "ptr")]
+unsafe impl SelectAtomicFnInner<true, { size_of::<*mut ()>() }> for fn() {
+    type Atomic = atomic::AtomicPtr<()>;
+    type Raw = *mut ();
 }
 
-impl<T: FnPtrSealed> FnPtrExt for T {}
-
-macro_rules! get_atomic {
-    (($ty: ty, $u_cell: expr) => |$atomic: ident| { $($body:tt)* }) => {
-        if core::mem::size_of::<$ty>() == core::mem::size_of::<*mut ()>() {
-            use core::sync::atomic::AtomicPtr;
-
-            let $atomic = &*($u_cell.get() as *mut AtomicPtr<()>);
-            $($body)*
-        }
-        else if core::mem::size_of::<$ty>() == core::mem::size_of::<usize>() {
-            use core::sync::atomic::AtomicUsize;
-
-            let $atomic = &*($u_cell.get() as *mut AtomicUsize);
-            $($body)*
-        }
-        else {
-            use core::sync::atomic::{
-                AtomicU16,
-                AtomicU32,
-                AtomicU64,
-            };
-
-            match core::mem::size_of::<$ty>() {
-                16 => {
-                    let $atomic = &*($u_cell.get() as *mut AtomicU16);
-                    $($body)*
-                },
-                32 => {
-                    let $atomic = &*($u_cell.get() as *mut AtomicU32);
-                    $($body)*
-                },
-                64 => {
-                    let $atomic = &*($u_cell.get() as *mut AtomicU64);
-                    $($body)*
-                },
-                _ => panic!("The crate does not support the current platform"),
-            }
-        }
-    }
+#[cfg(target_has_atomic = "16")]
+unsafe impl SelectAtomicFnInner<false, { size_of::<u16>() }> for fn() {
+    type Atomic = atomic::AtomicU16;
+    type Raw = u16;
 }
 
-pub(crate) use get_atomic;
+#[cfg(target_has_atomic = "32")]
+unsafe impl SelectAtomicFnInner<false, { size_of::<u32>() }> for fn() {
+    type Atomic = atomic::AtomicU32;
+    type Raw = u32;
+}
+
+#[cfg(target_has_atomic = "64")]
+unsafe impl SelectAtomicFnInner<false, { size_of::<u64>() }> for fn() {
+    type Atomic = atomic::AtomicU64;
+    type Raw = u64;
+}
+
+/// An `Atomic` type with a size and alignment compatible to store and load any
+/// `fn` on this platform.
+pub type AtomicFnInner =
+    <fn() as SelectAtomicFnInner<USE_ATOMIC_PTR, { size_of::<fn()>() }>>::Atomic;
+
+/// The non-atomic type stored in the [`AtomicFnInner`] atomic type.
+pub type AtomicFnInnerRaw =
+    <fn() as SelectAtomicFnInner<USE_ATOMIC_PTR, { size_of::<fn()>() }>>::Raw;
+
+const _: () = assert!(
+    size_of::<AtomicFnInner>() == size_of::<fn()>()
+        && size_of::<AtomicFnInner>() == size_of::<AtomicFnInnerRaw>()
+);
+const _: fn(&AtomicFnInner) = |inner: &AtomicFnInner| {
+    let _check_inner_type: *mut AtomicFnInnerRaw = inner.as_ptr();
+};

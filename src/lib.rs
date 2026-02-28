@@ -5,13 +5,12 @@
 
 mod impls;
 
-use core::cell::UnsafeCell;
-use core::fmt::{self, Formatter, Debug, Pointer};
+use core::fmt::{self, Debug, Formatter, Pointer};
 use core::panic::RefUnwindSafe;
 use core::sync::atomic::Ordering;
 
-use impls::FnPtrExt;
-use impls::get_atomic;
+use impls::AtomicFnInner;
+use impls::AtomicFnInnerRaw;
 
 /// A function pointer type which can be safely shared between threads.
 ///
@@ -19,7 +18,6 @@ use impls::get_atomic;
 ///
 /// **Note**: This type is only available on platforms that support atomic
 /// loads and stores of u16, u32, u64, usize, or pointers.
-/// Its size depends on the target's function pointer size.
 ///
 /// # Compatibility with other atomics
 ///
@@ -34,11 +32,11 @@ use impls::get_atomic;
 ///
 /// Because this type works with function pointers, avoid constructing an
 /// `AtomicFnPtr` with a function item type - most methods will not work.
-#[cfg_attr(target_pointer_width = "16", repr(C, align(2)))]
-#[cfg_attr(target_pointer_width = "32", repr(C, align(4)))]
-#[cfg_attr(target_pointer_width = "64", repr(C, align(8)))]
+#[repr(C)]
 pub struct AtomicFnPtr<T: FnPtr> {
-    cell: UnsafeCell<T>,
+    // Ensures that `inner` is aligned for the held `fn` as well.
+    _align: [T; 0],
+    inner: AtomicFnInner,
 }
 
 impl<T: FnPtr> AtomicFnPtr<T> {
@@ -60,7 +58,8 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     #[inline]
     pub fn new(fn_ptr: T) -> AtomicFnPtr<T> {
         AtomicFnPtr {
-            cell: UnsafeCell::new(fn_ptr),
+            _align: [],
+            inner: AtomicFnInner::new(fn_ptr.to_raw()),
         }
     }
 
@@ -84,7 +83,8 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// ```
     #[inline]
     pub fn into_inner(self) -> T {
-        self.cell.into_inner()
+        // SAFETY: `self.inner` stores a valid instance of `T`.
+        unsafe { T::from_raw(self.inner.into_inner()) }
     }
 
     /// Returns a mutable reference to the underlying pointer.
@@ -111,7 +111,15 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// ```
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
-        self.cell.get_mut()
+        let inner_as_ptr: *mut AtomicFnInnerRaw = self.inner.get_mut();
+        let inner_as_fn: *mut T = inner_as_ptr.cast();
+        // SAFETY:
+        // - `inner` is aligned for `T` due to `self._align`.
+        // - `self.inner` stores a valid instance of `T`.
+        // - `AtomicFnInnerRaw` is guaranteed to be the same size as `T`.
+        // - None of the possible types for `AtomicFnInnerRaw` have a stricter
+        //   bit validity requirement than `T`.
+        unsafe { &mut *inner_as_fn }
     }
 }
 
@@ -141,12 +149,9 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 6);
     /// ```
     pub fn load(&self, order: Ordering) -> T {
-        unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let raw = atomic.load(order);
-                T::from_raw(raw)
-            })
-        }
+        let raw = self.inner.load(order);
+        // SAFETY: `self.inner` stores a valid instance of `T`.
+        unsafe { T::from_raw(raw) }
     }
 
     /// Stores a value into the pointer.
@@ -179,11 +184,7 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 10);
     /// ```
     pub fn store(&self, fn_ptr: T, order: Ordering) {
-        unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                atomic.store(fn_ptr.to_raw(), order);
-            })
-        }
+        self.inner.store(fn_ptr.to_raw(), order);
     }
 
     /// Stores a value into the pointer, returning the previous value.
@@ -217,12 +218,9 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 10);
     /// ```
     pub fn swap(&self, fn_ptr: T, order: Ordering) -> T {
-        unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let old_raw = atomic.swap(fn_ptr.to_raw(), order);
-                T::from_raw(old_raw)
-            })
-        }
+        let old_raw = self.inner.swap(fn_ptr.to_raw(), order);
+        // SAFETY: `self.inner` stores a valid instance of `T`.
+        unsafe { T::from_raw(old_raw) }
     }
 
     /// Stores a value into the pointer if the current value is the same as the `current` value.
@@ -289,16 +287,11 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     )]
     pub fn compare_and_swap(&self, current: T, new: T, order: Ordering) -> T {
         #[allow(deprecated)]
-        unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let raw = atomic.compare_and_swap(
-                    current.to_raw(),
-                    new.to_raw(),
-                    order
-                );
-                T::from_raw(raw)
-            })
-        }
+        let raw = self
+            .inner
+            .compare_and_swap(current.to_raw(), new.to_raw(), order);
+        // SAFETY: `self.inner` stores a valid instance of `T`.
+        unsafe { T::from_raw(raw) }
     }
 
     /// Stores a value into the pointer if the current value is the same as the `current` value.
@@ -355,19 +348,15 @@ impl<T: FnPtr> AtomicFnPtr<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<T, T> {
+        let result = self
+            .inner
+            .compare_exchange(current.to_raw(), new.to_raw(), success, failure);
+        // SAFETY: `self.inner` stores a valid instance of `T`.
         unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let result = atomic.compare_exchange(
-                    current.to_raw(),
-                    new.to_raw(),
-                    success,
-                    failure,
-                );
-                match result {
-                    Ok(raw) => Ok(T::from_raw(raw)),
-                    Err(raw) => Err(T::from_raw(raw))
-                }
-            })
+            match result {
+                Ok(raw) => Ok(T::from_raw(raw)),
+                Err(raw) => Err(T::from_raw(raw)),
+            }
         }
     }
 
@@ -432,19 +421,15 @@ impl<T: FnPtr> AtomicFnPtr<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<T, T> {
+        let result =
+            self.inner
+                .compare_exchange_weak(current.to_raw(), new.to_raw(), success, failure);
+        // SAFETY: `self.inner` stores a valid instance of `T`.
         unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let result = atomic.compare_exchange_weak(
-                    current.to_raw(),
-                    new.to_raw(),
-                    success,
-                    failure,
-                );
-                match result {
-                    Ok(raw) => Ok(T::from_raw(raw)),
-                    Err(raw) => Err(T::from_raw(raw))
-                }
-            })
+            match result {
+                Ok(raw) => Ok(T::from_raw(raw)),
+                Err(raw) => Err(T::from_raw(raw)),
+            }
         }
     }
 
@@ -513,20 +498,16 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     where
         F: FnMut(T) -> Option<T>,
     {
+        let result = self.inner.fetch_update(set_order, fetch_order, move |raw| {
+            // SAFETY: `self.inner` stores a valid instance of `T`.
+            func(unsafe { T::from_raw(raw) }).map(|fn_ptr| fn_ptr.to_raw())
+        });
+        // SAFETY: `self.inner` stores a valid instance of `T`.
         unsafe {
-            get_atomic!((T, self.cell) => |atomic| {
-                let result = atomic.fetch_update(
-                    set_order,
-                    fetch_order,
-                    move |raw| {
-                        func(T::from_raw(raw)).map(|fn_ptr| fn_ptr.to_raw())
-                    }
-                );
-                match result {
-                    Ok(raw) => Ok(T::from_raw(raw)),
-                    Err(raw) => Err(T::from_raw(raw))
-                }
-            })
+            match result {
+                Ok(raw) => Ok(T::from_raw(raw)),
+                Err(raw) => Err(T::from_raw(raw)),
+            }
         }
     }
 }
@@ -563,8 +544,37 @@ unsafe impl<T: FnPtr + Sync> Sync for AtomicFnPtr<T> {}
 impl<T: FnPtr + RefUnwindSafe> RefUnwindSafe for AtomicFnPtr<T> {}
 
 mod sealed {
-    pub trait FnPtrSealed: Copy {}
+    use crate::impls::AtomicFnInnerRaw;
+
+    pub trait FnPtrSealed: Copy {
+        // These methods are inaccesible outside of the crate as they are
+        // within a sealed trait.
+        #[doc(hidden)]
+        fn to_raw(self) -> AtomicFnInnerRaw;
+
+        #[inline(always)]
+        #[doc(hidden)]
+        /// # Safety
+        ///
+        /// The bytes of `raw` must make up a valid instance of `Self`.
+        unsafe fn from_raw(raw: AtomicFnInnerRaw) -> Self {
+            // This should already be guaranteed by static type dispatch.
+            const { assert!(size_of::<AtomicFnInnerRaw>() == size_of::<Self>()) }
+
+            // Note: Integer-to-pointer transmutes (including through `union`)
+            // are considered problematic. It is best to first cast to `*mut ()`
+            // to ensure proper pointer provenance.
+            // See https://doc.rust-lang.org/std/primitive.fn.html#casting-to-and-from-integers.
+            // However, this recommendation can only be followed if a `*mut ()`
+            // can be `transmute`d back into a `fn()` by having the same size.
+
+            // SAFETY: The caller promised that `transmute` is valid, since
+            //         the source and destination sizes are confirmed equal.
+            unsafe { core::mem::transmute_copy(&raw) }
+        }
+    }
 }
+use sealed::FnPtrSealed;
 
 pub trait FnPtr: Copy + sealed::FnPtrSealed /* Eq + Ord + Hash + Pointer + Debug */ {
     // Empty
@@ -572,24 +582,51 @@ pub trait FnPtr: Copy + sealed::FnPtrSealed /* Eq + Ord + Hash + Pointer + Debug
 
 macro_rules! impl_fn_ptr {
     (@impl traits ($($generics:tt)*) $fn:ty) => {
-        impl<Ret $($generics)*> sealed::FnPtrSealed for $fn {}
+        impl<Ret $($generics)*> FnPtrSealed for $fn {
+            fn to_raw(self) -> AtomicFnInnerRaw {
+                self as AtomicFnInnerRaw
+            }
+        }
         impl<Ret $($generics)*> FnPtr for $fn {}
     };
+    (@impl plus_unsafe ($($generics:tt)*) ($($rest:tt)*)) => {
+        impl_fn_ptr!(@impl traits ($($generics)*) $($rest)*);
+        impl_fn_ptr!(@impl traits ($($generics)*) unsafe $($rest)*);
+    };
+    (@impl with_abi $generics:tt extern $abi:literal ($($rest:tt)*)) => {
+        impl_fn_ptr!(@impl plus_unsafe $generics (extern $abi $($rest)*));
+    };
+    (@impl abis $generics:tt [$($abi:literal),* $(,)?] $rest:tt) => {
+        $(impl_fn_ptr!(@impl with_abi $generics extern $abi $rest);)*
+    };
     (@impl variadics $($arg:ident),+) => {
-        impl_fn_ptr!(@impl traits ($(,$arg)+) extern "C" fn($($arg),+ , ...) -> Ret);
-        impl_fn_ptr!(@impl traits ($(,$arg)+) unsafe extern "C" fn($($arg),+ , ...) -> Ret);
+        impl_fn_ptr!(
+            @impl abis ($(,$arg)+)
+            ["C", "C-unwind", "system", "system-unwind"]
+            (fn($($arg),+ , ...) -> Ret)
+        );
     };
     (@impl variadics) => {
         // Variadic functions must have at least one non variadic arg
     };
     ($($arg:ident),*) => {
-        impl_fn_ptr!(@impl traits ($(,$arg)*) fn($($arg),*) -> Ret);
-        impl_fn_ptr!(@impl traits ($(,$arg)*) unsafe fn($($arg),*) -> Ret);
-        impl_fn_ptr!(@impl traits ($(,$arg)*) extern "C" fn($($arg),*) -> Ret);
-        impl_fn_ptr!(@impl traits ($(,$arg)*) unsafe extern "C" fn($($arg),*) -> Ret);
+        impl_fn_ptr!(@impl plus_unsafe ($(,$arg)*) (fn($($arg),*) -> Ret));
+        impl_fn_ptr!(
+            @impl abis ($(,$arg)*)
+            ["C", "C-unwind", "system", "system-unwind"]
+            (fn($($arg),*) -> Ret)
+        );
+        // TODO: support platform-specific ABIs
         impl_fn_ptr!(@impl variadics $($arg),*);
     };
 }
+
+const _: fn() = || {
+    fn check_impl<T: FnPtr>() {}
+    check_impl::<fn(i32)>();
+    check_impl::<unsafe fn(*mut ()) -> &'static u32>();
+    check_impl::<unsafe extern "C-unwind" fn(u64)>();
+};
 
 impl_fn_ptr!();
 impl_fn_ptr!(A);
@@ -608,17 +645,3 @@ impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
-
-const _: () = {
-    use core::mem::{align_of as align, size_of as size};
-
-    let [/* The crate does not support the target platform. */] = [
-        ();
-        !(size::<fn()>() == 8 || size::<fn()>() == 16 || size::<fn()>() == 32 || size::<fn()>() == 64) as usize
-    ];
-
-    let [/* The crate does not support the target platform. */] = [
-        ();
-        !(align::<fn()>() == 1  || align::<fn()>() == 2 || align::<fn()>() == 4 || align::<fn()>() == 8) as usize
-    ];
-};
