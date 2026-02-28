@@ -1,5 +1,5 @@
-use core::sync::atomic;
 use crate::FnPtr;
+use core::sync::atomic;
 
 /// Ideally, an atomic pointer is used, with a function pointer being the
 /// same size as a data pointer.
@@ -21,30 +21,37 @@ pub unsafe trait SelectAtomicFnInner<const USE_ATOMIC_PTR: bool, const SIZE: usi
 
     /// The non-atomic type stored in the [`AtomicFnInner`] atomic type.
     type Raw;
+
+    /// The value with which to represent a `None::<fn()>>`.
+    const ZERO: Self::Raw;
 }
 
 #[cfg(target_has_atomic = "ptr")]
 unsafe impl SelectAtomicFnInner<true, { size_of::<*mut ()>() }> for fn() {
     type Atomic = atomic::AtomicPtr<()>;
     type Raw = *mut ();
+    const ZERO: Self::Raw = core::ptr::null_mut();
 }
 
 #[cfg(target_has_atomic = "16")]
 unsafe impl SelectAtomicFnInner<false, { size_of::<u16>() }> for fn() {
     type Atomic = atomic::AtomicU16;
     type Raw = u16;
+    const ZERO: Self::Raw = 0;
 }
 
 #[cfg(target_has_atomic = "32")]
 unsafe impl SelectAtomicFnInner<false, { size_of::<u32>() }> for fn() {
     type Atomic = atomic::AtomicU32;
     type Raw = u32;
+    const ZERO: Self::Raw = 0;
 }
 
 #[cfg(target_has_atomic = "64")]
 unsafe impl SelectAtomicFnInner<false, { size_of::<u64>() }> for fn() {
     type Atomic = atomic::AtomicU64;
     type Raw = u64;
+    const ZERO: Self::Raw = 0;
 }
 
 /// An `Atomic` type with a size and alignment compatible to store and load any
@@ -91,6 +98,17 @@ pub trait FnPtrSealed: Copy {
         unsafe { core::mem::transmute_copy(&raw) }
     }
 }
+
+impl<T: FnPtrSealed> FnPtrSealed for Option<T> {
+    fn to_raw(self) -> AtomicFnInnerRaw {
+        match self {
+            Some(inner) => inner.to_raw(),
+            None => <fn() as SelectAtomicFnInner<USE_ATOMIC_PTR, { size_of::<fn()>() }>>::ZERO,
+        }
+    }
+}
+
+impl<T: FnPtr> FnPtr for Option<T> {}
 
 macro_rules! impl_fn_ptr {
     (@impl traits ($($generics:tt)*) $fn:ty) => {
@@ -157,4 +175,3 @@ impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
-

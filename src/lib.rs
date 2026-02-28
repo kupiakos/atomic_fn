@@ -547,3 +547,110 @@ impl<T: FnPtr + RefUnwindSafe> RefUnwindSafe for AtomicFnPtr<T> {}
 pub trait FnPtr: Copy + FnPtrSealed /* Eq + Ord + Hash + Pointer + Debug */ {
     // Empty
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use core::sync::atomic::Ordering;
+
+    fn add_one(x: i32) -> i32 {
+        x + 1
+    }
+
+    fn double(x: i32) -> i32 {
+        x * 2
+    }
+
+    #[test]
+    fn option_new_some_into_inner() {
+        let f: Option<fn(i32) -> i32> = Some(add_one);
+        let atomic = AtomicFnPtr::new(f);
+        assert_eq!(atomic.into_inner().unwrap()(5), 6);
+    }
+
+    #[test]
+    fn option_new_none_into_inner() {
+        let f: Option<fn(i32) -> i32> = None;
+        let atomic = AtomicFnPtr::new(f);
+        assert!(atomic.into_inner().is_none());
+    }
+
+    #[test]
+    fn option_load_some() {
+        let atomic = AtomicFnPtr::new(Some(add_one as fn(i32) -> i32));
+        assert_eq!(atomic.load(Ordering::SeqCst).unwrap()(10), 11);
+    }
+
+    #[test]
+    fn option_load_none() {
+        let atomic: AtomicFnPtr<Option<fn(i32) -> i32>> = AtomicFnPtr::new(None);
+        assert!(atomic.load(Ordering::SeqCst).is_none());
+    }
+
+    #[test]
+    fn option_store_none_then_some() {
+        let atomic: AtomicFnPtr<Option<fn(i32) -> i32>> = AtomicFnPtr::new(None);
+        assert!(atomic.load(Ordering::SeqCst).is_none());
+        atomic.store(Some(double), Ordering::SeqCst);
+        assert_eq!(atomic.load(Ordering::SeqCst).unwrap()(5), 10);
+    }
+
+    #[test]
+    fn option_store_some_then_none() {
+        let atomic = AtomicFnPtr::new(Some(add_one as fn(i32) -> i32));
+        atomic.store(None, Ordering::SeqCst);
+        assert!(atomic.load(Ordering::SeqCst).is_none());
+    }
+
+    #[test]
+    fn option_swap_some_to_none() {
+        let atomic = AtomicFnPtr::new(Some(add_one as fn(i32) -> i32));
+        let old = atomic.swap(None, Ordering::SeqCst);
+        assert_eq!(old.unwrap()(3), 4);
+        assert!(atomic.load(Ordering::SeqCst).is_none());
+    }
+
+    #[test]
+    fn option_swap_none_to_some() {
+        let atomic: AtomicFnPtr<Option<fn(i32) -> i32>> = AtomicFnPtr::new(None);
+        let old = atomic.swap(Some(double), Ordering::SeqCst);
+        assert!(old.is_none());
+        assert_eq!(atomic.load(Ordering::SeqCst).unwrap()(3), 6);
+    }
+
+    #[test]
+    fn option_get_mut_some_to_none() {
+        let mut atomic = AtomicFnPtr::new(Some(add_one as fn(i32) -> i32));
+        *atomic.get_mut() = None;
+        assert!(atomic.into_inner().is_none());
+    }
+
+    #[test]
+    fn option_get_mut_none_to_some() {
+        let mut atomic: AtomicFnPtr<Option<fn(i32) -> i32>> = AtomicFnPtr::new(None);
+        *atomic.get_mut() = Some(double);
+        assert_eq!(atomic.into_inner().unwrap()(4), 8);
+    }
+
+    #[test]
+    fn option_compare_exchange_success() {
+        let atomic: AtomicFnPtr<Option<fn(i32) -> i32>> = AtomicFnPtr::new(None);
+        let result =
+            atomic.compare_exchange(None, Some(add_one), Ordering::SeqCst, Ordering::SeqCst);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+        assert_eq!(atomic.load(Ordering::SeqCst).unwrap()(7), 8);
+    }
+
+    #[test]
+    fn option_compare_exchange_failure() {
+        let atomic = AtomicFnPtr::new(Some(add_one as fn(i32) -> i32));
+        let result =
+            atomic.compare_exchange(None, Some(double), Ordering::SeqCst, Ordering::SeqCst);
+        assert!(result.is_err());
+        // Value unchanged
+        assert_eq!(atomic.load(Ordering::SeqCst).unwrap()(5), 6);
+    }
+}
