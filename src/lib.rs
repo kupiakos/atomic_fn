@@ -18,7 +18,7 @@ use impls::get_atomic;
 /// This type has the same in-memory representation as a `fn()`.
 ///
 /// **Note**: This type is only available on platforms that support atomic
-/// loads and stores of u8, u16, u32, u64, usize, or pointers.
+/// loads and stores of u16, u32, u64, usize, or pointers.
 /// Its size depends on the target's function pointer size.
 ///
 /// # Function pointers vs function item types
@@ -29,7 +29,6 @@ use impls::get_atomic;
 ///
 /// Because this type works with function pointers, avoid constructing an
 /// `AtomicFnPtr` with a function item type - most methods will not work.
-#[cfg_attr(target_pointer_width = "8", repr(C, align(1)))]
 #[cfg_attr(target_pointer_width = "16", repr(C, align(2)))]
 #[cfg_attr(target_pointer_width = "32", repr(C, align(4)))]
 #[cfg_attr(target_pointer_width = "64", repr(C, align(8)))]
