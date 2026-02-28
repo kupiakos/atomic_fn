@@ -1,4 +1,5 @@
 use core::sync::atomic;
+use crate::FnPtr;
 
 /// Ideally, an atomic pointer is used, with a function pointer being the
 /// same size as a data pointer.
@@ -62,3 +63,98 @@ const _: () = assert!(
 const _: fn(&AtomicFnInner) = |inner: &AtomicFnInner| {
     let _check_inner_type: *mut AtomicFnInnerRaw = inner.as_ptr();
 };
+
+pub trait FnPtrSealed: Copy {
+    // These methods are inaccesible outside of the crate as they are
+    // within a sealed trait.
+    #[doc(hidden)]
+    fn to_raw(self) -> AtomicFnInnerRaw;
+
+    #[inline(always)]
+    #[doc(hidden)]
+    /// # Safety
+    ///
+    /// The bytes of `raw` must make up a valid instance of `Self`.
+    unsafe fn from_raw(raw: AtomicFnInnerRaw) -> Self {
+        // This should already be guaranteed by static type dispatch.
+        const { assert!(size_of::<AtomicFnInnerRaw>() == size_of::<Self>()) }
+
+        // Note: Integer-to-pointer transmutes (including through `union`)
+        // are considered problematic. It is best to first cast to `*mut ()`
+        // to ensure proper pointer provenance.
+        // See https://doc.rust-lang.org/std/primitive.fn.html#casting-to-and-from-integers.
+        // However, this recommendation can only be followed if a `*mut ()`
+        // can be `transmute`d back into a `fn()` by having the same size.
+
+        // SAFETY: The caller promised that `transmute` is valid, since
+        //         the source and destination sizes are confirmed equal.
+        unsafe { core::mem::transmute_copy(&raw) }
+    }
+}
+
+macro_rules! impl_fn_ptr {
+    (@impl traits ($($generics:tt)*) $fn:ty) => {
+        impl<Ret $($generics)*> FnPtrSealed for $fn {
+            fn to_raw(self) -> AtomicFnInnerRaw {
+                self as AtomicFnInnerRaw
+            }
+        }
+        impl<Ret $($generics)*> FnPtr for $fn {}
+    };
+    (@impl plus_unsafe ($($generics:tt)*) ($($rest:tt)*)) => {
+        impl_fn_ptr!(@impl traits ($($generics)*) $($rest)*);
+        impl_fn_ptr!(@impl traits ($($generics)*) unsafe $($rest)*);
+    };
+    (@impl with_abi $generics:tt extern $abi:literal ($($rest:tt)*)) => {
+        impl_fn_ptr!(@impl plus_unsafe $generics (extern $abi $($rest)*));
+    };
+    (@impl abis $generics:tt [$($abi:literal),* $(,)?] $rest:tt) => {
+        $(impl_fn_ptr!(@impl with_abi $generics extern $abi $rest);)*
+    };
+    (@impl variadics $($arg:ident),+) => {
+        impl_fn_ptr!(
+            @impl abis ($(,$arg)+)
+            ["C", "C-unwind", "system", "system-unwind"]
+            (fn($($arg),+ , ...) -> Ret)
+        );
+    };
+    (@impl variadics) => {
+        // Variadic functions must have at least one non variadic arg
+    };
+    ($($arg:ident),*) => {
+        impl_fn_ptr!(@impl plus_unsafe ($(,$arg)*) (fn($($arg),*) -> Ret));
+        impl_fn_ptr!(
+            @impl abis ($(,$arg)*)
+            ["C", "C-unwind", "system", "system-unwind"]
+            (fn($($arg),*) -> Ret)
+        );
+        // TODO: support platform-specific ABIs
+        impl_fn_ptr!(@impl variadics $($arg),*);
+    };
+}
+
+const _: fn() = || {
+    fn check_impl<T: FnPtr>() {}
+    check_impl::<fn(i32)>();
+    check_impl::<unsafe fn(*mut ()) -> &'static u32>();
+    check_impl::<unsafe extern "C-unwind" fn(u64)>();
+};
+
+impl_fn_ptr!();
+impl_fn_ptr!(A);
+impl_fn_ptr!(A, B);
+impl_fn_ptr!(A, B, C);
+impl_fn_ptr!(A, B, C, D);
+impl_fn_ptr!(A, B, C, D, E);
+impl_fn_ptr!(A, B, C, D, E, F);
+impl_fn_ptr!(A, B, C, D, E, F, G);
+impl_fn_ptr!(A, B, C, D, E, F, G, H);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
+impl_fn_ptr!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+
