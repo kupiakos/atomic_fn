@@ -71,7 +71,9 @@ const _: fn(&AtomicFnInner) = |inner: &AtomicFnInner| {
     let _check_inner_type: *mut AtomicFnInnerRaw = inner.as_ptr();
 };
 
-pub trait FnPtrSealed: Copy {
+/// # Safety
+/// The value returned by `to_raw` must be valid to pass to `from_raw`.
+pub unsafe trait FnPtrSealed: Copy {
     // These methods are inaccesible outside of the crate as they are
     // within a sealed trait.
     #[doc(hidden)]
@@ -99,7 +101,7 @@ pub trait FnPtrSealed: Copy {
     }
 }
 
-impl<T: FnPtrSealed> FnPtrSealed for Option<T> {
+unsafe impl<T: FnPtrSealed> FnPtrSealed for Option<T> {
     fn to_raw(self) -> AtomicFnInnerRaw {
         match self {
             Some(inner) => inner.to_raw(),
@@ -112,7 +114,8 @@ impl<T: FnPtr> FnPtr for Option<T> {}
 
 macro_rules! impl_fn_ptr {
     (@impl traits ($($generics:tt)*) $fn:ty) => {
-        impl<Ret $($generics)*> FnPtrSealed for $fn {
+        // SAFETY: the return of `to_raw` is a valid instance of `self`
+        unsafe impl<Ret $($generics)*> FnPtrSealed for $fn {
             fn to_raw(self) -> AtomicFnInnerRaw {
                 self as AtomicFnInnerRaw
             }
