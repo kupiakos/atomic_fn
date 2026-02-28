@@ -21,6 +21,11 @@ use impls::get_atomic;
 /// loads and stores of u16, u32, u64, usize, or pointers.
 /// Its size depends on the target's function pointer size.
 ///
+/// # Compatibility with other atomics
+///
+/// This type is not guaranteed to be alignment or ABI-compatible with any other
+/// atomic function pointer type, including in C or C++.
+///
 /// # Function pointers vs function item types
 ///
 /// A `fn()` function pointer and the name of a `fn foo {}` are not the same
