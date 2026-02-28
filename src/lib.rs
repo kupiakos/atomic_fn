@@ -43,6 +43,20 @@ pub struct AtomicFnPtr<T: FnPtr> {
 
 impl<T: FnPtr> AtomicFnPtr<T> {
     /// Creates a new `AtomicFnPtr`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let atomic = AtomicFnPtr::new(ptr);
+    /// assert_eq!((atomic.into_inner())(5), 6);
+    /// ```
     #[inline]
     pub fn new(fn_ptr: T) -> AtomicFnPtr<T> {
         AtomicFnPtr {
@@ -54,6 +68,20 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     ///
     /// This is safe because passing `self` by value guarantees that no other threads are
     /// concurrently accessing the atomic data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let atomic = AtomicFnPtr::new(ptr);
+    /// assert_eq!((atomic.into_inner())(5), 6);
+    /// ```
     #[inline]
     pub fn into_inner(self) -> T {
         self.cell.into_inner()
@@ -63,6 +91,24 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     ///
     /// This is safe because the mutable reference guarantees that no other threads are
     /// concurrently accessing the atomic data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
+    /// }
+    ///
+    /// let mut atomic = AtomicFnPtr::new(add_one as fn(i32) -> i32);
+    /// *atomic.get_mut() = double;
+    /// assert_eq!((atomic.into_inner())(5), 10);
+    /// ```
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
         self.cell.get_mut()
@@ -79,6 +125,21 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// # Panics
     ///
     /// Panics if `order` is [`Ordering::Release`] or [`Ordering::AcqRel`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let atomic = AtomicFnPtr::new(ptr);
+    /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 6);
+    /// ```
     pub fn load(&self, order: Ordering) -> T {
         unsafe {
             get_atomic!((T, self.cell) => |atomic| {
@@ -96,6 +157,27 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// # Panics
     ///
     /// Panics if `order` is [`Ordering::Acquire`] or [`Ordering::AcqRel`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
+    /// }
+    ///
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let atomic = AtomicFnPtr::new(ptr);
+    /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 6);
+    /// atomic.store(double, Ordering::Relaxed);
+    /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 10);
+    /// ```
     pub fn store(&self, fn_ptr: T, order: Ordering) {
         unsafe {
             get_atomic!((T, self.cell) => |atomic| {
@@ -113,6 +195,27 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     ///
     /// **Note:** This method is only available on platforms that support atomic
     /// operations on pointers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atomic_fn::AtomicFnPtr;
+    /// use std::sync::atomic::Ordering;
+    ///
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
+    /// }
+    ///
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
+    /// }
+    ///
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let atomic = AtomicFnPtr::new(ptr);
+    /// let old = atomic.swap(double, Ordering::Relaxed);
+    /// assert_eq!(old(5), 6);
+    /// assert_eq!((atomic.load(Ordering::Relaxed))(5), 10);
+    /// ```
     pub fn swap(&self, fn_ptr: T, order: Ordering) -> T {
         unsafe {
             get_atomic!((T, self.cell) => |atomic| {
@@ -134,7 +237,7 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// happens, and using [`Ordering::Release`] makes the load part [`Ordering::Relaxed`].
     ///
     /// **Note:** This method is only available on platforms that support atomic
-    /// operations on pointers.
+    /// operations on function pointer-sized types.
     ///
     /// # Migrating to `compare_exchange` and `compare_exchange_weak`
     ///
@@ -159,23 +262,23 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// use atomic_fn::AtomicFnPtr;
     /// use std::sync::atomic::Ordering;
     ///
-    /// fn a_fn() {
-    ///     println!("Called `a_fn`")
+    /// fn a_fn(x: i32) -> i32 {
+    ///     x + 1
     /// }
     ///
-    /// fn another_fn() {
-    ///     println!("Called `another_fn`")
+    /// fn another_fn(x: i32) -> i32 {
+    ///     x * 2
     /// }
     ///
-    /// let ptr: fn() = a_fn;
+    /// let ptr: fn(i32) -> i32 = a_fn;
     /// let some_ptr = AtomicFnPtr::new(ptr);
-    /// let other_ptr: fn() = another_fn;
+    /// let other_ptr: fn(i32) -> i32 = another_fn;
     ///
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!((some_ptr.load(Ordering::Relaxed))(10), 11);
     ///
     /// let value = some_ptr.compare_and_swap(ptr, other_ptr, Ordering::Relaxed);
     ///
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!((some_ptr.load(Ordering::Relaxed))(10), 20);
     /// ```
     #[deprecated(
         since = "0.1.0",
@@ -221,28 +324,29 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// use std::sync::atomic::Ordering;
     /// use atomic_fn::AtomicFnPtr;
     ///
-    /// fn a_fn() {
-    ///     println!("Called `a_fn`")
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
     /// }
     ///
-    /// fn another_fn() {
-    ///     println!("Called `another_fn`")
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
     /// }
     ///
-    /// let ptr: fn() = a_fn;
-    /// let some_ptr  = AtomicFnPtr::new(ptr);
-    /// let other_ptr: fn()  = another_fn;
+    /// let ptr: fn(i32) -> i32 = add_one;
+    /// let some_ptr = AtomicFnPtr::new(ptr);
+    /// let other_ptr: fn(i32) -> i32 = double;
     ///
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!((some_ptr.load(Ordering::SeqCst))(5), 6);
     ///
     /// let value = some_ptr.compare_exchange(
     ///     ptr,
     ///     other_ptr,
     ///     Ordering::SeqCst,
-    ///     Ordering::Relaxed
+    ///     Ordering::Relaxed,
     /// );
     ///
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!(value, Ok(ptr));
+    /// assert_eq!((some_ptr.load(Ordering::SeqCst))(5), 10);
     /// ```
     pub fn compare_exchange(
         &self,
@@ -292,32 +396,34 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// use atomic_fn::AtomicFnPtr;
     /// use std::sync::atomic::Ordering;
     ///
-    /// fn a_fn() {
-    ///     println!("Called `a_fn`")
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
     /// }
     ///
-    /// fn another_fn() {
-    ///     println!("Called `another_fn`")
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
     /// }
     ///
-    /// let some_ptr = AtomicFnPtr::new(a_fn as fn());
-    /// let new = another_fn;
+    /// let some_ptr = AtomicFnPtr::new(add_one as fn(i32) -> i32);
+    /// let new: fn(i32) -> i32 = double;
     /// let mut old = some_ptr.load(Ordering::Relaxed);
     ///
-    /// old();
+    /// assert_eq!(old(5), 6);
     ///
     /// loop {
     ///     match some_ptr.compare_exchange_weak(old, new, Ordering::SeqCst, Ordering::Relaxed) {
     ///         Ok(x) => {
-    ///             x();
+    ///             assert_eq!(x(5), 6);
     ///             break;
     ///         }
     ///         Err(x) => {
-    ///             x();
-    ///             old = x
+    ///             assert_eq!(x(5), 6);
+    ///             old = x;
     ///         }
     ///     }
     /// }
+    ///
+    /// assert_eq!((some_ptr.load(Ordering::Relaxed))(5), 10);
     /// ```
     pub fn compare_exchange_weak(
         &self,
@@ -373,20 +479,20 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     /// use atomic_fn::AtomicFnPtr;
     /// use std::sync::atomic::Ordering;
     ///
-    /// fn a_fn() {
-    ///     println!("Called `a_fn`")
+    /// fn add_one(x: i32) -> i32 {
+    ///     x + 1
     /// }
     ///
-    /// fn another_fn() {
-    ///     println!("Called `another_fn`")
+    /// fn double(x: i32) -> i32 {
+    ///     x * 2
     /// }
     ///
-    /// let ptr: fn() = a_fn;
+    /// let ptr: fn(i32) -> i32 = add_one;
     /// let some_ptr = AtomicFnPtr::new(ptr);
-    /// let new: fn() = another_fn;
+    /// let new: fn(i32) -> i32 = double;
     ///
     /// assert_eq!(some_ptr.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |_| None), Err(ptr));
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!((some_ptr.load(Ordering::SeqCst))(5), 6);
     /// let result = some_ptr.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
     ///     if x == ptr {
     ///         Some(new)
@@ -395,9 +501,8 @@ impl<T: FnPtr> AtomicFnPtr<T> {
     ///     }
     /// });
     /// assert_eq!(result, Ok(ptr));
-    /// (some_ptr.load(Ordering::SeqCst))();
+    /// assert_eq!((some_ptr.load(Ordering::SeqCst))(5), 10);
     /// assert_eq!(some_ptr.load(Ordering::SeqCst), new);
-    /// (some_ptr.load(Ordering::SeqCst))();
     /// ```
     pub fn fetch_update<F>(
         &self,
