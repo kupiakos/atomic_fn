@@ -489,6 +489,7 @@ macro_rules! impl_fn_ptr {
 }
 
 impl_fn_ptr!();
+impl_fn_ptr!(A);
 impl_fn_ptr!(A, B);
 impl_fn_ptr!(A, B, C);
 impl_fn_ptr!(A, B, C, D);
